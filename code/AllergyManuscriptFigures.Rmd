@@ -1,0 +1,1600 @@
+---
+title: "Wambre Allergy Manuscript Figures"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+library(plyr)
+library(dplyr)
+library(ggplot2); theme_set(
+  theme_bw(20) +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_rect(colour="black", fill=NA, size=1),
+          axis.text=element_text(colour="black"),
+          axis.ticks=element_line(colour="black"),
+          legend.key = element_blank(),
+          text = element_text(size=12),
+          strip.text.x = element_text(size = 10,margin = margin( b = 2, t = 2) ),
+            strip.background = element_rect(fill="white", colour="black")))
+
+library(ggthemes)
+library(ggbeeswarm)
+library(viridis)
+library(stringr)
+library(readxl)
+library(kableExtra)
+library(reshape2)
+library(scales)
+library(lubridate) 
+library(RColorBrewer)
+library(tidyr)
+library(pcaMethods)
+library(plotly)
+library(gridExtra)
+library(ggalluvial)
+library(forcats)
+library(lme4)
+library(multcomp)
+library(ComplexHeatmap)
+
+opts_chunk$set(fig.width=6, fig.height=3.5, cache = TRUE, echo=FALSE, warning=FALSE, message=FALSE)
+opts_knit$set(root.dir = "/Users/hdeberg/Box/AR101_Trial_Wambre")
+
+options(stringsAsFactors = FALSE)
+```
+
+```{r set_up_directories}
+base_dir <- "/Users/hdeberg/Box/AR101_Trial_Wambre"
+data_dir <- file.path(base_dir, "data")
+plots_dir <- file.path(base_dir, "plots/2021DecAllergy")
+tables_dir <- file.path(base_dir, "tables")
+```
+
+```{r load_data}
+load(file.path(data_dir, "AR101.RData"))
+```
+
+```{r load_clinical_data_update}
+
+#Read in updated, more complete clinical data
+study_data <- read_excel(file.path(data_dir, "arc003_phenotype.xls"))
+#Make vars numeric
+study_data <- study_data %>%
+  dplyr::mutate(across(c(5:15), as.numeric))
+
+study_data$reactor <- ifelse(study_data$TREATMENT == "Screen Failure", "non-reactor", "reactor")
+
+#Check against old clinical data
+# merged_screen <- left_join(clinical_data, study_data[study_data$VISIT == "Screen",], by = c("pid" = "PID"))
+# 
+# #New data is more complete
+# sum(!(merged_screen$mtd_baseline == merged_screen$FC_MTD), na.rm =T)
+# sum(is.na(merged_screen$mtd_baseline))
+# sum(is.na(merged_screen$FC_MTD))
+# 
+# sum(!(merged_screen$mtd_baseline == merged_screen$FC_MTD), na.rm =T)
+# sum(!(merged_screen$spt_baseline == merged_screen$SPT), na.rm =T)
+# sum(is.na(merged_screen$spt_baseline))
+# sum(is.na(merged_screen$SPT))
+# 
+# sum(!(merged_screen$ige_baseline == merged_screen$PS_IGE), na.rm =T)
+# sum(!(merged_screen$igg4_baseline == merged_screen$PS_IGG4), na.rm =T)
+# 
+# #Check T-cell data
+# merged_screen <- full_join(merged_screen, t_cell_data_pct[t_cell_data_pct$visit == "Screen",],
+#                            by = c("pid"))
+# 
+# sort(merged_screen$CRTH2_PTEFF_PCT-merged_screen$th2a)
+# sort(merged_screen$CCR6_PTEFF_PCT-(merged_screen$crth2neg_cd27neg_ccr6pos+merged_screen$crth2neg_cd27pos_ccr6pos))
+# sort(merged_screen$CD27_PTEFF_PCT-(merged_screen$crth2neg_cd27pos_ccr6pos+merged_screen$crth2neg_cd27pos_ccr6neg))
+
+```
+
+
+```{r load_bat_fit_data_from_colin}
+
+#Load BAT curve fitting results using bayesian fittings. Two models were run, one which compared treated vs untreated and one which compared non-reactors to reactors at baseline. 
+
+bat_fit_data_treated <- read.table(file.path(data_dir, "BAT_fitting", "individual_estimates_active_placebo.tsv"), sep="\t",
+                           header = T)
+
+bat_fit_data_treated <- bat_fit_data_treated %>%
+  dplyr::rename(pid = id) 
+
+bat_fit_data_treated$estimate[bat_fit_data_treated$parameter == "Asymptote"] <- 
+    100*bat_fit_data_treated$estimate[bat_fit_data_treated$parameter == "Asymptote"]
+
+bat_fit_data_treated$visit <- factor(bat_fit_data_treated$visit, levels = c("Screen", "Exit"))
+
+#Individual estimates for screen failure vs screen pass comparison
+
+bat_fit_data_reactor <- read.table(file.path(data_dir, "BAT_fitting", "screening_failure_subject_data.tsv"), sep="\t",
+                           header = T)
+
+bat_fit_data_reactor <- bat_fit_data_reactor %>%
+  dplyr::rename(pid = id_chr)
+
+bat_fit_data_reactor$estimate[bat_fit_data_reactor$parameter == "Asymptote"] <- 
+    100*bat_fit_data_reactor$estimate[bat_fit_data_reactor$parameter == "Asymptote"]
+
+bat_fit_data_reactor$reactor <- ifelse(bat_fit_data_reactor$treatment == "Screen Failure", "non-reactor", "reactor")
+```
+
+```{r convert_bat_dilutions}
+#The concentration key below has been provided by the Wambre lab
+
+concentration_key <- data.frame("dilution" = c(paste0("Dil", seq(0,7,1))),
+                                "conc_ng_ml" = c(100000,10000,1000,100,10,1,0.1,0.01)) 
+
+#Map the bayesian fitting -1 to +1 scaled dilution values to the concentrations actually used in the experiment 
+concentration_map <- function(scaled_dil){
+    
+    #Dilution 0 to 7 were scaled between -1(Dil7) and +1(Dil0)
+    #The -1 to +1 numbers should be scaled between 0.01(10^-2) and 10^5
+    unscaled_dil_exponent <- 3.5*scaled_dil+1.5
+    unscaled_dil <- 10^unscaled_dil_exponent
+    
+    return(unscaled_dil)
+}
+
+convert_midpoint <- function(bat_fit_df){
+  
+  bat_fit_df_midpoint <- bat_fit_df %>%
+    dplyr::filter(parameter == "Midpoint") %>%
+    dplyr::mutate(estimate = concentration_map(estimate),
+                  lower = concentration_map(lower),
+                  upper = concentration_map(upper))
+
+bat_fit_df <- bat_fit_df %>%
+    dplyr::filter(parameter != "Midpoint")
+
+bat_fit_df <- rbind(bat_fit_df, bat_fit_df_midpoint)
+
+return(bat_fit_df)
+  
+}
+
+bat_fit_data_treated <- convert_midpoint(bat_fit_data_treated)
+bat_fit_data_reactor <- convert_midpoint(bat_fit_data_reactor)
+
+```
+
+```{r define_color_palettes}
+#Set color palettes
+reactor_colors <- c("non-reactor" = "black",
+                      "reactor" = "darkorange")
+
+treatment_colors <- c("Screen Failure" = "black",
+                      "AR101" = "darkred",
+                      "Placebo" = "darkblue")
+
+visit_colors <- c("Screen" = "darkgreen",
+                  "Exit" = "gold2")
+
+immunotype_reactor_colors <- c("Th2A high" = "red",
+                               "Th2A low" = "darkcyan",
+                               "Non-reactor" = "gray10",
+                               "Neither" = "black")
+
+spectral_pal <- RColorBrewer::brewer.pal(11, "Spectral")
+severity_colors <- c("Mild" = spectral_pal[9],
+                     "Moderate" = spectral_pal[5],
+                     "Severe" = spectral_pal[2])  
+
+get_colors <- function(color_vec = rev(as.vector(sunset_colors)),
+                       min_value = 0,
+                       max_value = 100){
+  
+  value_breaks <- seq(min_value, 
+                      max_value,
+                      along.with = color_vec)
+  
+  col_fun = circlize::colorRamp2(value_breaks, 
+                                 color_vec)
+  
+  return(col_fun)
+  
+                       }
+
+column_col_fun = get_colors(color_vec = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+                     min_value = 0.3,
+                     max_value = 30)
+
+spectral_pal <- RColorBrewer::brewer.pal(11, "Spectral")
+mtd_colors <- spectral_pal[2:10]
+names(mtd_colors) <- as.factor(sort(unique(study_data$FC_MTD)))
+
+cb_pal <- colorblind_pal()(8)
+cell_subset_colors <- cb_pal[c(7,6,4,3)]
+names(cell_subset_colors) <- c("TH2A pTeff",
+                        "CCR6+ pTeff",
+                        "TH2conv pTeff",
+                        "TH0 pTeff")
+```
+
+#Figure 1
+
+##Figure 1A
+
+Basophil test results from subjects who did not respond to the positive control were excluded from futher analysis. Failure to respond to the positive control was defined as a change in CD203c of less than 10% between the T- (negative control) and T+ (positive control) conditions. 
+
+```{r filter_non_responders}
+clinical_data$reactor <- ifelse(clinical_data$treatment %in% c("Placebo", "AR101"), "reactor",
+                                ifelse(clinical_data$treatment == "Screen Failure", "non-reactor", "0"))
+
+bat_data <- left_join(bat_data, clinical_data)
+
+bat_data$cd203c_pct <- as.numeric(bat_data$cd203c_pct)
+
+bat_data$visit <- factor(bat_data$visit, levels = c("Screen", "Exit"))
+
+bat_data$stim <- factor(bat_data$stim, levels = c("Dil0", "Dil1", "Dil2", "Dil3", "Dil4", "Dil5", "Dil6", "Dil7", "T-", "T+", "Alder", "Grass"))
+
+#Remove subjects with delta CD203c for T+ of less than 10% at the screening visit
+
+bat_data_t_minus <- bat_data[bat_data$stim == "T-",]
+
+bat_data$t_minus_cd203c <- bat_data_t_minus$cd203c_pct[match(paste0(bat_data$pid, bat_data$visit), paste0(bat_data_t_minus$pid,bat_data_t_minus$visit))] 
+
+bat_data$delta_cd203c <- bat_data$cd203c_pct - bat_data$t_minus_cd203c
+
+bat_data_t_plus <- bat_data[bat_data$stim == "T+",]
+
+bat_data$delta_t_plus <- bat_data_t_plus$delta_cd203c[match(paste0(bat_data$pid, bat_data$visit), paste0(bat_data_t_plus$pid, bat_data_t_plus$visit))]
+
+pos_control_threshold <- 10
+
+bat_data_pos_control_failure <- bat_data %>%
+    dplyr::filter(visit == "Screen") %>%
+    dplyr::filter(delta_t_plus < pos_control_threshold)
+
+filter_bst_non_responders <- TRUE
+if(filter_bst_non_responders){ 
+bat_data <- bat_data %>%
+    dplyr::filter(!(pid %in% bat_data_pos_control_failure$pid))
+
+#Remove subjects with <threshold delta CD203c+ T+ stim from Colin's fitted results
+bat_fit_data_reactor <- bat_fit_data_reactor[!(bat_fit_data_reactor$pid %in% bat_data_pos_control_failure$pid),]
+
+bat_fit_data_treated <- bat_fit_data_treated[!(bat_fit_data_treated$pid %in% bat_data_pos_control_failure$pid),]
+
+} 
+
+```
+
+```{r fig1a}
+
+bat_screen <- bat_data %>%
+  dplyr::filter(visit == "Screen") %>%
+  dplyr::filter(!is.na(reactor))
+
+bat_screen$stim <- factor(bat_screen$stim, levels = c("T-", 
+                                                      "T+", 
+                                                      "Dil7",
+                                                      "Dil6",
+                                                      "Dil5",
+                                                      "Dil4",
+                                                      "Dil3",
+                                                      "Dil2",
+                                                      "Dil1",
+                                                      "Dil0",
+                                                      "Alder",
+                                                      "Grass"))
+
+pdf(file.path(plots_dir, "Figure1A.pdf"), 
+    height=3.5, width = 7.3, 
+    useDingbats = F)
+
+g <- ggplot(bat_screen[!(bat_screen$stim %in% c("Dil0", "Dil7", "Alder", "Grass", "T-")),],
+            aes(x=reactor, 
+                y = delta_cd203c, 
+                color=reactor))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_quasirandom()+
+  scale_color_manual(values = reactor_colors, guide=F)+
+    scale_y_continuous(limits = c(-25,110), breaks = c(-25,0,25,50,75,100))+
+  facet_wrap(~stim, ncol = 8, scales="fixed")+
+  labs(x="", y = "Delta CD203c+", color="")+
+  scale_x_discrete(labels=c("non-reactor" = "DBPCFC Non-Reactor", "reactor" = "DBPCFC Reactor"))+
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1))
+
+print(g)
+
+invisible(dev.off())
+
+```
+
+```{r bat_screen_stats_deltacd203c}
+bat_screen %>% 
+  dplyr::group_by(reactor) %>% 
+  dplyr::summarise(n_subj = length(unique(pid)))
+
+
+bat_screen_stats_delta <- bat_screen %>%
+    dplyr::filter(stim != "T-") %>%
+  dplyr::group_by(stim) %>%
+  summarize(`p-value` = t.test(delta_cd203c[reactor == "reactor"],
+                                delta_cd203c[reactor == "non-reactor"])$p.value) %>%
+  dplyr::rename(Stimulation = stim)
+  
+bat_screen_stats_delta$FDR <- round(p.adjust(bat_screen_stats_delta$`p-value`),2)
+
+bat_screen_stats_delta$`p-value` <- round(bat_screen_stats_delta$`p-value`,2)
+
+
+bat_screen_stats_delta$comparison <- "Reactors vs Non-reactors"
+bat_screen_stats_delta$Test <- "T-test"
+
+bat_screen_stats_delta$`Peanut extract conc, ng/ML` <- concentration_key$conc_ng_ml[match(bat_screen_stats_delta$Stimulation, concentration_key$dilution)]
+
+#Deal with p-values that are rounded to 0
+bat_screen_stats_delta$`p-value` <- fix_p_value_rounding(bat_screen_stats_delta$`p-value`)
+
+bat_screen_stats_delta %>%
+  kable(row.names = F) %>%  
+  kable_styling("striped", full_width = F, position = "left") %>%
+  scroll_box(height = "200px") 
+
+```
+
+##Figure 1B
+
+Provided by Colin 
+
+##Figure 1C
+
+```{r figure 1C}
+
+g_bat_fit_reactor_midpoint  <- bat_fit_data_reactor %>%
+  dplyr::filter(parameter == "Midpoint") %>%
+  ggplot(aes(x=reactor, 
+             y = estimate, 
+             color=reactor, 
+             group = reactor))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_quasirandom()+
+  scale_color_manual(values = reactor_colors, guide=F)+
+   scale_y_log10() +
+  labs(x="", y= "EC-50, ng/mL", color="")+
+  scale_x_discrete(labels=c("non-reactor" = "DBPCFC Non-Reactor", "reactor" = "DBPCFC Reactor"))+
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1))
+    
+
+pdf(file.path(plots_dir, "Figure1C.pdf"), 
+    height=3.5, width = 2, 
+    useDingbats = F)
+
+print(g_bat_fit_reactor_midpoint)
+
+invisible(dev.off())
+
+bat_fit_data_reactor %>% 
+  dplyr::group_by(reactor) %>% 
+  dplyr::summarise(n_subj = length(unique(pid)))
+```
+
+##Figure 1D
+
+```{r basophil_max_reactivity_deltacd203c}
+bat_max_reactivity_delta <- bat_data %>%
+  dplyr::filter(str_detect(stim, "Dil")) %>%
+  group_by(pid, treatment, reactor, visit) %>%
+  summarise(max_cd203c = max(delta_cd203c),
+            max_dose = stim[delta_cd203c == max(cd203c_pct)][1])
+ 
+bat_max_reactivity_delta$reactor <- ifelse(bat_max_reactivity_delta$treatment == "Screen Failure", "non-reactor", "reactor")
+
+```
+
+```{r fig1d}
+
+g_cdmax_delta  <- ggplot(data=bat_max_reactivity_delta[bat_max_reactivity_delta$visit == "Screen",], 
+       aes(x=reactor, y = max_cd203c, color=reactor))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_quasirandom()+
+  scale_color_manual(values = reactor_colors, guide=F)+
+  labs(x="", y = "CD-Max (max delta 203c+)", color="")+
+  scale_x_discrete(labels=c("non-reactor" = "DBPCFC Non-Reactor", "reactor" = "DBPCFC Reactor"))+
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1))
+
+print(g_cdmax_delta)
+
+pdf(file.path(plots_dir, "Figure1D.pdf"), 
+    height=3.5, width = 1.8, 
+    useDingbats = F)
+
+print(g_cdmax_delta)
+
+invisible(dev.off())
+
+```
+
+##Figures 1E-1H
+
+```{r max_dose_vs_basophils}
+study_data_screen <- study_data %>%
+  dplyr::filter(VISIT == "Screen")
+
+figure1 <- bat_fit_data_reactor %>%
+  dplyr::select(-one_of(c("lower", "upper"))) %>%
+  dplyr::filter(reactor == "reactor") %>%
+  pivot_wider(names_from = parameter,
+              values_from = estimate) %>%
+  dplyr::rename(ec50 = Midpoint,
+                cdmax = Asymptote) 
+
+
+figure1$mtd_screen <- study_data_screen$FC_MTD[match(figure1$pid,
+                                                          study_data_screen$PID)]
+
+figure1$severity_screen <- clinical_data$severity_baseline[match(figure1$pid,
+                                                          clinical_data$pid)]
+
+g_fig1_ec50_mtd <- figure1 %>%
+  ggplot(aes(x = mtd_screen,
+             y = ec50,
+             group = mtd_screen))+
+  geom_boxplot(outlier.shape = NA,
+               color = "darkorange") +
+  geom_quasirandom(color = "darkorange") +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(x = "MTD",
+       y = "EC50")
+
+g_fig1_cdmax_mtd <- figure1 %>%
+  ggplot(aes(x = mtd_screen,
+             y = cdmax,
+             group = mtd_screen))+
+  geom_boxplot(outlier.shape = NA,
+               color = "darkorange") +
+  geom_quasirandom(color = "darkorange") +
+  scale_x_log10() +
+  labs(x = "MTD",
+       y = "CD-MAX")
+
+g_fig1_ec50_severity <- figure1 %>%
+  dplyr::filter(!is.na(severity_screen)) %>%
+  ggplot(aes(x = severity_screen,
+             y = ec50,
+             group = severity_screen))+
+  geom_boxplot(outlier.shape = NA,
+               color = "darkorange") +
+  geom_quasirandom(color = "darkorange") +
+  scale_y_log10() +
+  labs(x = "Severity",
+       y = "EC50")
+
+g_fig1_cdmax_severity <- figure1 %>%
+  dplyr::filter(!is.na(severity_screen)) %>%
+  ggplot(aes(x = severity_screen,
+             y = cdmax,
+             group = severity_screen))+
+  geom_boxplot(outlier.shape = NA,
+               color = "darkorange") +
+  geom_quasirandom(color = "darkorange") +
+  labs(x = "Severity",
+       y = "CD-MAX")
+
+fig1_width <- 3
+fig1_height <- 3.5
+
+pdf(file.path(plots_dir, "Figure1E.pdf"),
+    height = fig1_height,
+    width = fig1_width)
+print(g_fig1_ec50_mtd)
+invisible(dev.off())
+
+pdf(file.path(plots_dir, "Figure1F.pdf"),
+    height = fig1_height,
+    width = fig1_width)
+print(g_fig1_cdmax_mtd)
+invisible(dev.off())
+
+pdf(file.path(plots_dir, "Figure1G.pdf"),
+    height = fig1_height,
+    width = fig1_width)
+print(g_fig1_ec50_severity)
+invisible(dev.off())
+
+pdf(file.path(plots_dir, "Figure1H.pdf"),
+    height = fig1_height,
+    width = fig1_width)
+print(g_fig1_cdmax_severity)
+invisible(dev.off())
+
+```
+
+#Figure 2
+
+##Figure 2A
+
+```{r fig2a}
+
+t_cell_data_pct$reactor <- clinical_data$reactor[match(t_cell_data_pct$pid,
+                                                       clinical_data$pid)]
+
+g <- ggplot(t_cell_data_pct[t_cell_data_pct$visit == "Screen" ,], aes(x = reactor, y = cd154_freq, color=reactor))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_quasirandom()+
+  scale_color_manual(values = reactor_colors, guide=F)+
+  labs(x="", y = "Freq per M\nCD4+ CD45RO+", color="")+ 
+  scale_x_discrete(labels=c("non-reactor" = "DBPCFC Non-Reactor", "reactor" = "DBPCFC Reactor"))+
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1))+
+  ylim(c(0,7500))
+
+
+print(g)
+
+pdf(file.path(plots_dir, "Figure2A.pdf"), 
+    height=4.08, width = 2.65, useDingbats = F)
+
+print(g)
+
+invisible(dev.off())
+
+```
+
+##Figure 2B
+
+```{r fig2b}
+ 
+t_reg_data$reactor <- clinical_data$reactor[match(t_reg_data$pid,
+                                                       clinical_data$pid)]
+
+g_freq_ox40 <- ggplot(t_reg_data[t_reg_data$visit == "Screen",], aes(x = reactor, y = ox40_freq, color=reactor))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_quasirandom()+
+  scale_color_manual(values = reactor_colors, guide=F)+
+  labs(x="", y = "OX40+ freq per M\nCD4+ CD45RO+", color="")+
+  scale_x_discrete(labels=c("non-reactor" = "DBPCFC Non-Reactor", "reactor" = "DBPCFC Reactor"))+
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1))
+
+pdf(file.path(plots_dir, "Figure2B.pdf"), 
+    height=4.08, width = 2.65, useDingbats = F)
+
+print(g_freq_ox40)
+
+invisible(dev.off())
+```
+
+##Figure 2C
+
+```{r fig2c, fig.width=8, fig.height=3}
+
+t_cell_fig2c <- study_data %>%
+  dplyr::filter(VISIT == "Screen") %>%
+  dplyr::rename(CRTH2 = CRTH2_PTEFF_PCT,
+                CCR6 = CCR6_PTEFF_PCT,
+                CD27 = CD27_PTEFF_PCT) %>%
+  pivot_longer(cols = c("CRTH2",
+                        "CCR6",
+                        "CD27"),
+               names_to = "marker",
+               values_to = "percent") %>%
+  dplyr::filter(!is.na(percent)) %>%
+  dplyr::mutate(marker = factor(marker, levels = c("CRTH2",
+                                                   "CCR6",
+                                                   "CD27")))
+
+g_fig2c <- ggplot(t_cell_fig2c,
+       aes(x=reactor, y = percent, color=reactor))+
+    geom_boxplot(outlier.shape = NA)+
+    geom_quasirandom()+
+    scale_color_manual(values = reactor_colors, guide=F)+
+    ylim(c(0,120))+ 
+    labs(x="", y = "%pTeff cell subset")+
+    scale_x_discrete(labels=c("non-reactor" = "DBPCFC Non-Reactor", "reactor" = "DBPCFC Reactor"))+
+    facet_wrap(~marker,
+               nrow = 1)+
+    theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1))
+
+print(g)
+
+#Sizing for Th2A/CCR6/CD27 (but not CCR4 facet)
+pdf(file.path(plots_dir, "Figure2C.pdf"),
+     height=4.25, width = 5.58, useDingbats = F)
+
+print(g_fig2c)
+
+invisible(dev.off())
+
+```
+
+##Figure 2D
+
+```{r fig2d}
+
+t_cell_fig2d <- study_data %>%
+  dplyr::filter(VISIT == "Screen") %>%
+  dplyr::rename(CRTH2 = CRTH2_PTEFF_PCT,
+                CCR6 = CCR6_PTEFF_PCT,
+                CD27 = CD27_PTEFF_PCT) %>%
+    dplyr::filter(!is.na(CRTH2)) 
+
+#CRTH2 vs CCR6 in all
+g_crth2_ccr6 <- t_cell_fig2d %>%
+  ggplot(aes(x = CCR6, 
+             y = CRTH2, 
+             color=reactor))+
+  geom_point()+
+  scale_color_manual(values = reactor_colors, guide=F)+
+  xlim(0,100)+
+  ylim(0,100)+
+  labs(x="%CCR6+ pTeff cells", y = "%CRTH2+ pTeff cells", color="")+
+  coord_equal(ratio=1)
+
+g_cd27_ccr6 <- t_cell_fig2d %>%
+  ggplot(aes(x = CCR6, 
+             y = CD27, 
+             color=reactor))+
+  geom_point()+
+  scale_color_manual(values = reactor_colors, guide=F)+
+  xlim(0,100)+
+  ylim(0,100)+
+  labs(x="%CCR6+ pTeff cells", y = "%CD27+ pTeff cells", color="")+
+  coord_equal(ratio=1)
+
+g_crth2_cd27 <- t_cell_fig2d %>%
+  ggplot(aes(x = CCR6, 
+             y = CD27, 
+             color=reactor))+
+  geom_point()+
+  scale_color_manual(values = reactor_colors, guide=F)+
+  xlim(0,100)+
+  ylim(0,100)+
+  labs(x="%CCR6+ pTeff cells", y = "%CD27+ pTeff cells", color="")+
+  coord_equal(ratio=1)
+
+pdf(file.path(plots_dir, "Figure2D.pdf"),
+    height=5, width=8, useDingbats = F)
+
+ggpubr::ggarrange(g_crth2_ccr6,
+             g_cd27_ccr6,
+             g_crth2_cd27,
+             nrow = 1)
+
+invisible(dev.off())
+
+
+
+
+```
+
+#Figure 4
+
+##Figure 4A-F
+
+```{r fig4a_f}
+
+t_cell_fig4 <- study_data %>%
+  dplyr::filter(VISIT == "Screen",
+                TREATMENT != "Screen Failure") %>%
+  dplyr::rename(CRTH2 = CRTH2_PTEFF_PCT,
+                CCR6 = CCR6_PTEFF_PCT,
+                CD27 = CD27_PTEFF_PCT) %>%
+  pivot_longer(cols = c("CRTH2",
+                        "CCR6",
+                        "CD27"),
+               names_to = "marker",
+               values_to = "percent") %>%
+  dplyr::filter(!is.na(percent)) %>%
+  dplyr::mutate(marker = factor(marker, levels = c("CRTH2",
+                                                   "CCR6",
+                                                   "CD27")))
+
+t_cell_fig4$severity <- clinical_data$severity_baseline[match(t_cell_fig4$PID,
+                                                              clinical_data$pid)]
+
+g_ige <- t_cell_fig4 %>%
+  ggplot(aes(x= PS_IGE, 
+             y  = percent, 
+             color= reactor))+
+    geom_point()+
+    scale_color_manual(values = reactor_colors, guide=F)+
+    scale_x_log10()+
+    geom_smooth(method = "lm", se=T, color="black")+
+    scale_y_continuous(limits=c(-50,100)) + #Get se bands to extend to edges of plots
+    coord_cartesian(ylim=c(0,100)) +
+    labs(x="IgE, kU/L", y = "%Subset/pTeff")+
+    facet_wrap(~marker,
+               nrow = 1)
+
+g_freq <- t_cell_fig4 %>%
+  ggplot(aes(x= PTEFF_FREQ, 
+             y  = percent, 
+             color= reactor))+
+    geom_point()+
+    scale_color_manual(values = reactor_colors, guide=F)+
+    scale_x_log10()+
+    geom_smooth(method = "lm", se=T, color="black")+
+    scale_y_continuous(limits=c(-50,100)) + #Get se bands to extend to edges of plots
+    coord_cartesian(ylim=c(0,100)) +
+    labs(x="pTEFF freq/ 106 CD4+ CD45RO+", y = "%Subset/pTeff")+
+    facet_wrap(~marker,
+               nrow = 1)
+
+g_igg4 <- t_cell_fig4 %>%
+  ggplot(aes(x= PS_IGG4, 
+             y  = percent, 
+             color= reactor))+
+    geom_point()+
+    scale_color_manual(values = reactor_colors, guide=F)+
+    scale_x_log10()+
+    geom_smooth(method = "lm", se=T, color="black")+
+    scale_y_continuous(limits=c(-50,100)) + #Get se bands to extend to edges of plots
+    coord_cartesian(ylim=c(0,100)) +
+    labs(x="IgG4, mcg/mL", y = "%Subset/pTeff")+
+    facet_wrap(~marker,
+               nrow = 1)
+
+g_spt <- t_cell_fig4 %>%
+  ggplot(aes(x= SPT, 
+             y  = percent, 
+             color= reactor))+
+    geom_point()+
+    scale_color_manual(values = reactor_colors, guide=F)+
+    geom_smooth(method = "lm", se=T, color="black")+
+    scale_y_continuous(limits=c(-50,100)) + #Get se bands to extend to edges of plots
+    coord_cartesian(ylim=c(0,100)) +
+    labs(x="SPT, mm", y = "%Subset/pTeff")+
+    facet_wrap(~marker,
+               nrow = 1)
+
+g_severity <- t_cell_fig4 %>%
+  ggplot(aes(x= severity, 
+             y  = percent, 
+             color= reactor))+
+  geom_boxplot(outlier.shape = NA) +
+    geom_quasirandom()+
+    scale_color_manual(values = reactor_colors, guide=F)+
+    geom_smooth(method = "lm", se=T, color="black")+
+    scale_y_continuous(limits=c(-50,100)) + #Get se bands to extend to edges of plots
+    coord_cartesian(ylim=c(0,100)) +
+    labs(x="Severity", y = "%Subset/pTeff")+
+    facet_wrap(~marker,
+               nrow = 1)
+
+g_mtd <- t_cell_fig4 %>%
+  ggplot(aes(x= as.factor(FC_MTD), 
+             y  = percent, 
+             color= reactor))+
+  geom_boxplot(outlier.shape = NA) +
+    geom_quasirandom()+
+    scale_color_manual(values = reactor_colors, guide=F)+
+    geom_smooth(method = "lm", se=T, color="black")+
+    scale_y_continuous(limits=c(-50,100)) + #Get se bands to extend to edges of plots
+    coord_cartesian(ylim=c(0,100)) +
+    labs(x="MTD, mg", y = "%Subset/pTeff")+
+    facet_wrap(~marker,
+               nrow = 1)
+
+
+
+#Extend width for including CCR4
+pdf(file.path(plots_dir, "Figure4AtoD.pdf"), height = 10, width = 6, useDingbats = F,
+    onefile = F)
+
+ggpubr::ggarrange(g_ige,
+               g_freq,
+             g_igg4,
+             g_spt,
+             ncol = 1)
+
+invisible(dev.off())
+
+pdf(file.path(plots_dir, "Figure4EtoF.pdf"), height = 5, width = 6, useDingbats = F,
+    onefile = F)
+
+ggpubr::ggarrange(g_severity,
+             g_mtd,
+             ncol = 1)
+
+invisible(dev.off())
+
+```
+
+```{r figure4_correlation_coefs}
+#compute correlation coefficients
+
+fig_4_cor <- t_cell_fig4 %>%
+  dplyr::group_by(marker) %>%
+  dplyr::summarise(ige_cor = cor(percent, PS_IGE, method="spearman", use = "pairwise.complete.obs"),
+                   freq_cor = cor(percent, PTEFF_FREQ, method="spearman", use = "pairwise.complete.obs"),
+                   igg4_cor = cor(percent, PS_IGG4, method="spearman", use = "pairwise.complete.obs"),
+                   spt_cor = cor(percent, SPT, method="spearman", use = "pairwise.complete.obs"))
+
+
+```
+
+##Figure 4G
+
+```{r fig4g}
+
+
+heatmap_vars <- c("SPT",
+                  "PS_IGE",
+                  "PS_IGG4",
+                  "FC_MTD",
+                  "CRTH2_PTEFF_PCT",
+                  "CCR6_PTEFF_PCT",
+                  "CD27_PTEFF_PCT",
+                  "PTEFF_FREQ")
+
+heatmap_data <- study_data %>%
+  dplyr::filter(VISIT == "Screen",
+                TREATMENT != "Screen Failure",
+                !is.na(CRTH2_PTEFF_PCT)) %>%
+  dplyr::select(all_of(heatmap_vars), PID) %>% 
+  unique() %>%
+  dplyr::mutate(PS_IGE = log10(PS_IGE),
+                PS_IGG4 = log10(PS_IGG4)) %>%
+  dplyr::rename(`%CCR6+ pTeff` = CCR6_PTEFF_PCT,
+                `%CD27+ pTeff` = CD27_PTEFF_PCT,
+                `%CRTH2+ pTeff` = CRTH2_PTEFF_PCT,
+                `SPT`= SPT,
+                `MTD`= FC_MTD,
+                `IgG4` = PS_IGG4,
+                `IgE` = PS_IGE,
+                `CD154+ freq` = PTEFF_FREQ) %>%
+  as.data.frame()
+
+rownames(heatmap_data) <- heatmap_data[,"PID"]
+heatmap_data <- heatmap_data[,colnames(heatmap_data) != "PID"]  
+
+#Remove th2a results and use as column anno instead
+
+heatmap_data <- heatmap_data %>%
+  dplyr::arrange(`%CRTH2+ pTeff`)
+
+library(circlize)
+th2a_colors <- colorRamp2(c(0,100), c("darkcyan", "red"))
+
+column_anno <- HeatmapAnnotation(`%CRTH2+ pTeff` = heatmap_data[,"%CRTH2+ pTeff"],
+                                 col = list(`%CRTH2+ pTeff` = th2a_colors))
+
+heatmap_data <- heatmap_data %>%
+  dplyr::select(-one_of(c("%CRTH2+ pTeff")))
+
+scaled_data <- t(scale(heatmap_data))
+
+centered_data <- t(scale(heatmap_data, scale = FALSE))
+
+
+pdf(file.path(plots_dir, "Figure4G.pdf"), height = 4, width = 7, useDingbats = F)
+
+Heatmap(scaled_data,
+        name = "Row variable z-score",
+        cluster_columns = FALSE,
+        cluster_rows = TRUE,
+        clustering_distance_columns = "manhattan",
+        clustering_distance_rows = "manhattan",
+        #row_labels = heatmap_vars,
+        top_annotation = column_anno,
+        row_names_gp = gpar(fontsize = 12),
+        show_column_names = FALSE,
+        show_row_names = TRUE)
+
+invisible(dev.off())
+
+
+```
+
+#Figure 5
+
+```{r fig_5atod}
+
+fig_5_data <- study_data %>%
+  dplyr::filter(TREATMENT != "Screen Failure", 
+                VISIT != "End up") %>%
+  dplyr::mutate(VISIT = factor(VISIT,
+                               levels = c("Screen",
+                                          "Exit")))
+
+g_fig5_mtd <- fig_5_data %>%
+  ggplot(aes(x = interaction(VISIT, TREATMENT),
+             y = FC_MTD,
+             color = TREATMENT)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom()  +
+  scale_color_manual(values = treatment_colors, guide="none")+
+  scale_y_log10()+
+  scale_x_discrete(labels=c("Screen.AR101" = "Screen", 
+                              "Exit.AR101" = "Exit",
+                              "Screen.Placebo" = "Screen", 
+                              "Exit.Placebo" = "Exit")) +
+  labs(x="", y = "MTD, mg", color="")+
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1))  
+
+g_fig5_ige <- fig_5_data %>%
+  ggplot(aes(x = interaction(VISIT, TREATMENT),
+             y = PS_IGE,
+             color = TREATMENT)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom()  +
+  scale_color_manual(values = treatment_colors, guide="none")+
+  scale_y_log10()+
+  scale_x_discrete(labels=c("Screen.AR101" = "Screen", 
+                              "Exit.AR101" = "Exit",
+                              "Screen.Placebo" = "Screen", 
+                              "Exit.Placebo" = "Exit")) +
+  labs(x="", y = "IgE, kU/L", color="")+
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1))  
+
+g_fig5_igg4 <- fig_5_data %>%
+  ggplot(aes(x = interaction(VISIT, TREATMENT),
+             y = PS_IGG4,
+             color = TREATMENT)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom()  +
+  scale_color_manual(values = treatment_colors, guide="none")+
+  scale_y_log10()+
+  scale_x_discrete(labels=c("Screen.AR101" = "Screen", 
+                              "Exit.AR101" = "Exit",
+                              "Screen.Placebo" = "Screen", 
+                              "Exit.Placebo" = "Exit")) +
+  labs(x="", y = "IgG4, mcg/mL", color="")+
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1))  
+
+g_fig5_ec50 <- fig_5_data %>%
+  ggplot(aes(x = interaction(VISIT, TREATMENT),
+             y = BAT_EC50,
+             color = TREATMENT)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom()  +
+  scale_color_manual(values = treatment_colors, guide="none")+
+  scale_y_log10()+
+  scale_x_discrete(labels=c("Screen.AR101" = "Screen", 
+                              "Exit.AR101" = "Exit",
+                              "Screen.Placebo" = "Screen", 
+                              "Exit.Placebo" = "Exit")) +
+  labs(x="", y = "EC-50, ng/mL", color="")+
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1))  
+
+ 
+pdf(file.path(plots_dir, "Figure5AtoD.pdf"), height = 3, width = 10, useDingbats = F,
+    onefile = F)
+
+ggpubr::ggarrange(g_fig5_mtd,
+                  g_fig5_ige,
+                  g_fig5_igg4,
+                  g_fig5_ec50,
+             nrow = 1)
+
+invisible(dev.off())
+
+```
+
+```{r fig_5_stats}
+
+fig_5_data %>% 
+  dplyr::group_by(VISIT, TREATMENT) %>% 
+  dplyr::summarise(n_subj = length(unique(PID)))
+
+#Compare AR101 and placebos at the screening visit and at the exit visit
+fig5_stats <- fig_5_data %>%
+  dplyr::group_by(TREATMENT) %>%
+  dplyr::summarise(ige = wilcox.test(PS_IGE[VISIT == "Screen"],
+                                     PS_IGE[VISIT == "Exit"])$p.value,
+                   igg4 = wilcox.test(PS_IGG4[VISIT == "Screen"],
+                                     PS_IGG4[VISIT == "Exit"])$p.value,
+                   ec50 = wilcox.test(BAT_EC50[VISIT == "Screen"],
+                                     BAT_EC50[VISIT == "Exit"])$p.value,
+                   mtd = wilcox.test(FC_MTD[VISIT == "Screen"],
+                                     FC_MTD[VISIT == "Exit"])$p.value)
+
+
+#There are too many ties for mtd for a wilcox test to be used
+#Use the coin package instead
+coin::independence_test(FC_MTD ~ VISIT, 
+                        data = fig_5_data[fig_5_data$TREATMENT == "AR101",], 
+                        ytrafo = coin::rank_trafo, 
+                        distribution = coin::exact())
+
+coin::independence_test(FC_MTD ~ VISIT, 
+                        data = fig_5_data[fig_5_data$TREATMENT == "Placebo",], 
+                        ytrafo = coin::rank_trafo, 
+                        distribution = coin::exact())
+
+
+```
+
+```{r fig5_e_f_i_j}
+
+fig_5_treated_exit <- study_data %>%
+  dplyr::filter(TREATMENT == "AR101", 
+                VISIT == "Exit",
+                !is.na(FC_MTD)) %>%
+  dplyr::mutate(FC_MTD = factor(FC_MTD))
+
+g_fig5_mtd_igg4 <- fig_5_treated_exit %>%
+  ggplot(aes(x = FC_MTD,
+             y = PS_IGG4,
+             color = TREATMENT)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom()  +
+  scale_color_manual(values = treatment_colors, guide="none")+
+  scale_y_log10()+
+  labs(x="MTD, mg", y = "IgG4, mcg/mL") 
+
+g_fig5_mtd_ratio <- fig_5_treated_exit %>%
+  ggplot(aes(x = FC_MTD,
+             y = PS_RATIO,
+             color = TREATMENT)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom()  +
+  scale_color_manual(values = treatment_colors, guide="none")+
+  scale_y_log10()+
+  labs(x="MTD, mg", y = "IgE:IgG4") 
+
+g_fig5_mtd_ec50 <- fig_5_treated_exit %>%
+  ggplot(aes(x = FC_MTD,
+             y = BAT_EC50,
+             color = TREATMENT)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom()  +
+  scale_color_manual(values = treatment_colors, guide="none")+
+  scale_y_log10()+
+  labs(x="MTD, mg", y = "EC-50 ng/mL") 
+
+bat_max_treatment_delta <- bat_data %>%
+  dplyr::filter(str_detect(stim, "Dil")) %>%
+  group_by(pid, treatment, reactor, visit) %>%
+  summarise(max_cd203c = max(delta_cd203c),
+            max_dose = stim[delta_cd203c == max(cd203c_pct)][1])
+ 
+bat_max_reactivity_delta$reactor <- ifelse(bat_max_reactivity_delta$treatment == "Screen Failure", "non-reactor", "reactor")
+
+bat_data <- left_join(bat_data, study_data,
+                      by = c("pid" = "PID",
+                             "visit" = "VISIT",
+                             "treatment" = "TREATMENT"))
+
+bat_data_fig_5 <- bat_data %>%
+  dplyr::filter(str_detect(stim, "Dil")) %>%
+  dplyr::filter(treatment == "AR101",
+                visit == "Exit") %>%
+  group_by(pid, FC_MTD, treatment) %>%
+  summarise(max_cd203c = max(delta_cd203c))  %>%
+  dplyr::filter(!is.na(FC_MTD)) %>%
+  dplyr::mutate(FC_MTD = factor(FC_MTD,
+                                levels = c("30","300", "600", "1000"))) 
+
+g_fig5_mtd_cdmax <- bat_data_fig_5 %>%
+  ggplot(aes(x = FC_MTD,
+             y = max_cd203c,
+             color = treatment)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom()+
+  scale_color_manual(values = treatment_colors, guide="none")+
+  scale_x_discrete(drop=FALSE) +
+  labs(x="MTD, mg", y = "CD-max") 
+
+pdf(file.path(plots_dir, "Figure5EFIJ.pdf"), height = 2.65, width = 10, useDingbats = F,
+    onefile = F)
+
+ggpubr::ggarrange(g_fig5_mtd_igg4,
+                  g_fig5_mtd_ratio,
+                  g_fig5_mtd_ec50,
+                  g_fig5_mtd_cdmax,
+             nrow = 1)
+
+invisible(dev.off())
+
+```
+
+#Figure 5H
+
+```{r fig5h}
+
+study_data <- study_data %>%
+  dplyr::mutate(category = case_when(TREATMENT == "Screen Failure" ~ "Screen Failure",
+                                     TREATMENT != "Screen Failure" & VISIT == "Screen" ~ "Screen visit",
+                                     TREATMENT == "Placebo" & VISIT == "End up" ~ "Placebo end up visit",
+                                     TREATMENT == "AR101" & VISIT == "End up" ~ "AR101 end up visit",
+                                     TREATMENT == "Placebo" & VISIT == "Exit" ~ "Placebo exit visit",
+                                     TREATMENT == "AR101" & VISIT == "Exit" ~ "AR101 exit visit",
+                                     TRUE ~ "Other"))
+
+study_data_fig_5h <- study_data %>%
+  dplyr::filter(category %in% c("Screen Failure", 
+                                "AR101 exit visit",
+                                "Placebo exit visit")) %>%
+  droplevels() %>%
+  dplyr::mutate(category = factor(category, 
+                                  levels = c("Screen Failure",
+                                              "AR101 exit visit",
+                                              "Placebo exit visit"))) 
+
+#Add screen failure ec50 data to study_data
+reactor_ec50 <- bat_fit_data_reactor %>%
+  dplyr::filter(parameter == "Midpoint") %>%
+  dplyr::mutate(VISIT = "Screen")
+
+study_data_fig_5h <- left_join(study_data_fig_5h,
+                                           reactor_ec50,
+                               by = c("PID" = "pid",
+                                      "VISIT" = "VISIT"))
+
+study_data_fig_5h$comb_bat <- coalesce(study_data_fig_5h$BAT_EC50,
+                                       study_data_fig_5h$estimate)
+
+g_fig5h_ec50 <- study_data_fig_5h %>%
+  ggplot() +
+  aes(x = category,
+      y = comb_bat,
+      color = TREATMENT) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom() +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  scale_y_log10() +
+  labs(x = "",
+       y = "EC-50, ng/mL")
+
+pdf(file.path(plots_dir, "Figure5H.pdf"), height = 2.65, width = 4, useDingbats = F,
+    onefile = F)
+
+print(g_fig5h_ec50)
+
+invisible(dev.off())
+
+p_sf_ar101 <- wilcox.test(comb_bat ~ category,
+            data = study_data_fig_5h,
+            subset = category %in% c("Screen Failure",
+                                     "AR101 exit visit"))
+
+p_sf_pl <- wilcox.test(comb_bat ~ category,
+            data = study_data_fig_5h,
+            subset = category %in% c("Screen Failure",
+                                     "Placebo exit visit"))
+
+wilcox.test(comb_bat ~ category,
+            data = study_data_fig_5h,
+            subset = category %in% c("Placebo exit visit",
+                                     "AR101 exit visit"))
+
+
+```
+
+#Figure 6
+
+##Figure 6A
+
+```{r fig_6a}
+
+figure_6_data <- study_data %>%
+  dplyr::filter(TREATMENT != "Screen Failure") %>%
+  dplyr::mutate(VISIT = factor(VISIT,
+                               levels = c("Screen",
+                                          "End up",
+                                          "Exit")))
+
+g_fig6_teff <- figure_6_data %>%
+  ggplot(aes(x = VISIT,
+             y = PTEFF_FREQ,
+             color = TREATMENT))+
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom()+
+  ylim(c(0,8000)) +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  labs(x = "", y = "pTeff freq/106 CD4+ CD45RO+") +
+  facet_wrap(~TREATMENT,
+             nrow = 1)
+
+t_reg_data <- t_reg_data %>%
+  dplyr::filter(group != "Failed") %>%
+  dplyr::mutate(visit = factor(visit, 
+                               levels = c("Screen",
+                                          "Exit")))
+t_reg_data$group[t_reg_data$group == "placebo"] <- "Placebo"
+
+g_fig6_treg <- t_reg_data %>%
+  ggplot(aes(x = visit, 
+             y = ox40_freq, 
+             color=group))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_quasirandom()+
+  scale_color_manual(values = treatment_colors, guide="none")+
+  labs(x="", y = "pTreg freq/106 CD4+ CD45RO+")+
+  facet_wrap(~group, 
+             nrow = 1)
+
+
+pdf(file.path(plots_dir, "Figure6AB.pdf"), height = 2.5, width = 7, useDingbats = F,
+    onefile = F)
+
+ggpubr::ggarrange(g_fig6_teff,
+                  g_fig6_treg,
+             nrow = 1)
+
+invisible(dev.off())
+
+#Run stats
+
+figure_6_teff_stats <- figure_6_data %>%
+  dplyr::group_by(TREATMENT) %>%
+  dplyr::summarize(screen_v_exit = wilcox.test(PTEFF_FREQ[VISIT == "Screen"],
+                                            PTEFF_FREQ[VISIT == "Exit"])$p.value,
+                   screen_v_endup = wilcox.test(PTEFF_FREQ[VISIT == "Screen"],
+                                            PTEFF_FREQ[VISIT == "End up"])$p.value,
+                   endup_v_exit = wilcox.test(PTEFF_FREQ[VISIT == "End up"],
+                                            PTEFF_FREQ[VISIT == "Exit"])$p.value)
+p.adjust(c(figure_6_teff_stats[1,2:4],figure_6_teff_stats[2,2:4] ),method = "fdr") 
+
+figure_6_treg_stats <- t_reg_data %>%
+  dplyr::group_by(group) %>%
+  dplyr::summarize(screen_v_exit = wilcox.test(ox40_freq[visit == "Screen"],
+                                            ox40_freq[visit == "Exit"])$p.value)
+
+```
+
+##Figure 6C, D
+
+```{r fig6cd}
+
+t_cell_fig6c <- t_cell_data_freq %>%
+  dplyr::filter(treatment != "Screen Failure") %>%
+  dplyr::mutate(CCR6 = crth2neg_cd27neg_ccr6pos + crth2neg_cd27pos_ccr6pos,
+                CRTH2 = th2a,
+                visit = factor(visit, 
+                               levels = c("Screen",
+                                          "End up",
+                                          "Exit"))) %>%
+  pivot_longer(cols = c("CRTH2",
+                        "CCR6"),
+               names_to = "measurement",
+               values_to = "freq")
+
+t_cell_fig6d <- study_data %>%
+  dplyr::filter(TREATMENT != "Screen Failure") %>%
+  dplyr::mutate(CCR6 = CCR6_PTEFF_PCT,
+                CRTH2 = CRTH2_PTEFF_PCT,
+                treatment = TREATMENT,
+                visit = factor(VISIT, 
+                               levels = c("Screen",
+                                          "End up",
+                                          "Exit"))) %>%
+  pivot_longer(cols = c("CRTH2",
+                        "CCR6"),
+               names_to = "measurement",
+               values_to = "freq")
+
+cell_colors <- c("CRTH2" = "red",
+                 "CCR6" = "darkcyan")
+
+g_fig6_teff_freq <- t_cell_fig6c %>%
+  ggplot(aes(x=visit, 
+             y = freq+1,
+             color = measurement))+
+  #geom_boxplot(outlier.shape = NA)+
+  geom_quasirandom(dodge.width=.6,
+                   alpha = 0.5)+
+  stat_summary(aes(x=visit, 
+           y = freq+1, 
+           color=measurement,
+           group = interaction(measurement, treatment)),
+           position=position_dodge(0.6),
+       fun.y = "mean", 
+               size = 1.5,
+               geom="line") +
+  stat_summary(aes(x=visit, 
+           y = freq+1, 
+           color=measurement,
+           group = interaction(measurement, treatment),
+           width = 0.5),
+           position=position_dodge(0.6),
+           fun.ymin = function(x) mean(x) - sd(x)/sqrt(length(x)),
+           fun.ymax = function(x) mean(x) + sd(x)/sqrt(length(x)),
+           fun.y = "mean",
+               geom="errorbar") +
+  scale_color_manual(values = cell_colors, guide = "none")+
+  scale_y_log10(limits = c(1, 10^4)) +
+  facet_wrap(~treatment, nrow = 1)+
+  labs(x="", y = "%pTeff freq/\n10^6 CD4+ CD45RO+", color = "")
+
+
+g_fig6_teff_pct <- t_cell_fig6d %>%
+  ggplot(aes(x=visit, 
+             y = freq+1,
+             color = measurement))+
+  #geom_boxplot(outlier.shape = NA)+
+  geom_quasirandom(dodge.width=.6,
+                   alpha = 0.5)+
+  stat_summary(aes(x=visit, 
+           y = freq+1, 
+           color=measurement,
+           group = interaction(measurement, treatment)),
+           position=position_dodge(0.6),
+       fun.y = "mean", 
+               size = 1.5,
+               geom="line") +
+  stat_summary(aes(x=visit, 
+           y = freq+1, 
+           color=measurement,
+           group = interaction(measurement, treatment),
+           width = 0.5),
+           position=position_dodge(0.6),
+           fun.ymin = function(x) mean(x) - sd(x)/sqrt(length(x)),
+           fun.ymax = function(x) mean(x) + sd(x)/sqrt(length(x)),
+           fun.y = "mean",
+               geom="errorbar") +
+  scale_color_manual(values = cell_colors, guide = "none")+
+  scale_y_continuous(limits = c(0, 100)) +
+  facet_wrap(~treatment, nrow = 1)+
+  labs(x="", y = "%Subset/pTeff", color = "")
+
+pdf(file.path(plots_dir, "Figure6CD.pdf"), height = 2.5, width = 7.5, useDingbats = F,
+    onefile = F)
+
+ggpubr::ggarrange(g_fig6_teff_freq,
+                  g_fig6_teff_pct,
+             nrow = 1)
+
+invisible(dev.off())
+
+t_cell_fig6c_stats <- t_cell_fig6c %>%
+  dplyr::group_by(treatment, visit) %>%
+  dplyr::summarise(p_val = wilcox.test(freq[measurement == "CRTH2"],
+                                       freq[measurement == "CCR6"])$p.value,
+                   fdr = p.adjust(p_val, method = "fdr"))
+
+t_cell_fig6d_stats <- t_cell_fig6d %>%
+  dplyr::group_by(treatment, visit) %>%
+  dplyr::summarise(p_val = wilcox.test(freq[measurement == "CRTH2"],
+                                       freq[measurement == "CCR6"])$p.value,
+                   fdr = p.adjust(p_val, method = "fdr"))
+
+```
+
+## Figure 6E,F
+
+```{r fig6ef}
+
+g_fig6e <- study_data_fig_5h %>%
+  ggplot() +
+  aes(x = category,
+      y = PTEFF_FREQ,
+      color = TREATMENT) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom() +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  labs(x = "",
+       y = "pTeff freq/106 CD4+ CD45RO+") 
+
+g_fig6f_crth2 <- study_data_fig_5h %>%
+  ggplot() +
+  aes(x = category,
+      y = CRTH2_PTEFF_PCT,
+      color = TREATMENT) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom() +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  labs(x = "",
+       y = "%CRTH2+/pTeff") 
+
+g_fig6f_ccr6 <- study_data_fig_5h %>%
+  ggplot() +
+  aes(x = category,
+      y = CCR6_PTEFF_PCT,
+      color = TREATMENT) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom() +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  labs(x = "",
+       y = "%CCR6+/pTeff") 
+
+g_fig6f_cd27 <- study_data_fig_5h %>%
+  ggplot() +
+  aes(x = category,
+      y = CD27_PTEFF_PCT,
+      color = TREATMENT) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom() +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  labs(x = "",
+       y = "%CD27+/pTeff") 
+
+pdf(file.path(plots_dir, "Figure6EF.pdf"), height = 2.5, width = 8, useDingbats = F,
+    onefile = F)
+
+ggpubr::ggarrange(g_fig6e,
+                  g_fig6f_crth2,
+                  g_fig6f_ccr6,
+                  g_fig6f_cd27,
+             nrow = 1)
+
+invisible(dev.off())
+
+```
+
+#Figure 6G,H,I
+
+```{r figure6_ghi}
+
+screen_data <- study_data %>%
+  dplyr::filter(VISIT == "Screen",
+                TREATMENT != "Screen Failure")
+
+exit_data <- study_data %>%
+  dplyr::filter(VISIT == "Exit",
+                TREATMENT != "Screen Failure")
+
+screen_data$exit_igg4 <- exit_data$PS_IGG4[match(screen_data$PID, exit_data$PID)]
+screen_data$exit_freq <- exit_data$PTEFF_FREQ[match(screen_data$PID, exit_data$PID)]
+screen_data$exit_cd27 <- exit_data$CD27_PTEFF_PCT[match(screen_data$PID, exit_data$PID)]
+
+screen_data$ratio_igg4 <- screen_data$exit_igg4/screen_data$PS_IGG4
+screen_data$ratio_freq <- screen_data$exit_freq/screen_data$PTEFF_FREQ
+screen_data$ratio_cd27 <- screen_data$exit_cd27/screen_data$CD27_PTEFF_PCT
+
+g_ratio_igg4 <- screen_data %>%
+  ggplot(aes(x = CRTH2_PTEFF_PCT,
+             y = ratio_igg4,
+             color = TREATMENT,
+             group = TREATMENT))+ 
+  geom_point()+
+  geom_smooth(method = "lm") +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  geom_hline(yintercept = 1,
+             linetype = "dashed",
+             color = "black") +
+  scale_y_log10()+
+  xlim(c(0,100))+
+  labs(y = "Exit:Screen IgG4",
+       x = "Screen %CRTH2+ pTeff",
+       color = "") 
+
+g_ratio_freq <- screen_data %>%
+  ggplot(aes(x = CRTH2_PTEFF_PCT,
+             y = ratio_freq,
+             color = TREATMENT,
+             group = TREATMENT))+ 
+  geom_point()+
+  geom_smooth(method = "lm") +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  geom_hline(yintercept = 1,
+             linetype = "dashed",
+             color = "black") +
+  scale_y_log10()+
+  xlim(c(0,100))+
+  labs(y = "Exit:Screen pTeff freq/106 CD4+ CD45RO+",
+       x = "Screen %CRTH2+ pTeff",
+       color = "") 
+
+g_ratio_cd27 <- screen_data %>%
+  ggplot(aes(x = CRTH2_PTEFF_PCT,
+             y = ratio_cd27,
+             color = TREATMENT,
+             group = TREATMENT))+ 
+  geom_point()+
+  geom_smooth(method = "lm") +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  geom_hline(yintercept = 1,
+             linetype = "dashed",
+             color = "black") +
+  scale_y_log10()+
+  xlim(c(0,100))+
+  labs(y = "Exit:Screen %CD27+ pTeff",
+       x = "Screen %CRTH2+ pTeff",
+       color = "") 
+
+pdf(file.path(plots_dir, "Fig6GHI.pdf"),
+    height = 2.5, width = 8)
+
+ggpubr::ggarrange(g_ratio_igg4,
+                  g_ratio_freq,
+                  g_ratio_cd27,
+             nrow = 1)
+
+invisible(dev.off())
+
+
+
+```
+
+#Additional requested figures
+
+```{r add_figs}
+
+
+exit_data$screen_crth2 <- screen_data$CRTH2_PTEFF_PCT[match(exit_data$PID, screen_data$PID)]
+exit_data$screen_ccr6 <- screen_data$CCR6_PTEFF_PCT[match(exit_data$PID, screen_data$PID)]
+exit_data$screen_cd27 <- screen_data$CD27_PTEFF_PCT[match(exit_data$PID, screen_data$PID)]
+
+exit_data <- exit_data %>%
+  dplyr::filter(TREATMENT == "AR101") %>%
+  dplyr::mutate(FC_MTD = factor(FC_MTD,
+                                levels = c(30,
+                                           100,
+                                           300,
+                                           600,
+                                           1000))) %>%
+  dplyr::filter(!is.na(FC_MTD))
+
+g_screen_crth2 <- exit_data %>%
+  ggplot(aes(x = FC_MTD,
+             y = screen_crth2,
+             color = TREATMENT,
+             group = FC_MTD))+ 
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom() +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  labs(y = "Screen %CRTH2+ pTeff",
+       x = "Exit MTD, mg",
+       color = "") 
+
+g_screen_ccr6 <- exit_data %>%
+  ggplot(aes(x = FC_MTD,
+             y = screen_ccr6,
+             color = TREATMENT,
+             group = FC_MTD))+ 
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom() +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  labs(y = "Screen %CCR6+ pTeff",
+       x = "Exit MTD, mg",
+       color = "") 
+
+g_screen_cd27 <- exit_data %>%
+  ggplot(aes(x = FC_MTD,
+             y = screen_cd27,
+             color = TREATMENT,
+             group = FC_MTD))+ 
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom() +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  labs(y = "Screen %CD27+ pTeff",
+       x = "Exit MTD, mg",
+       color = "") 
+
+g_exit_igg4 <- exit_data %>%
+  ggplot(aes(x = FC_MTD,
+             y = PS_IGG4,
+             color = TREATMENT,
+             group = FC_MTD))+ 
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom() +
+  scale_y_log10() +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  labs(y = "Exit IgG4",
+       x = "Exit MTD, mg",
+       color = "") 
+
+g_exit_ratio <- exit_data %>%
+  ggplot(aes(x = FC_MTD,
+             y = PS_RATIO,
+             color = TREATMENT,
+             group = FC_MTD))+ 
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom() +
+  scale_y_log10() +
+  scale_color_manual(values = treatment_colors, guide = "none") +
+  labs(y = "Exit IgE:IgG4",
+       x = "Exit MTD, mg",
+       color = "") 
+
+pdf(file.path(plots_dir, "ExitMTDPlotsInActiveGroup.pdf"),
+    height = 5, width = 8)
+
+ggpubr::ggarrange(g_screen_crth2,
+                  g_screen_ccr6,
+                  g_screen_cd27,
+                  g_exit_igg4,
+                  g_exit_ratio,
+                  ncol = 3,
+                  nrow = 2)
+
+invisible(dev.off())
+
+```
+
+
